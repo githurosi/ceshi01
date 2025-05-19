@@ -1,0 +1,106 @@
+name: Auto Update Worker
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+    inputs:
+      force_update:
+        description: '是否强制更新（忽略版本和内容检查）'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  # 移除 id-token 权限（除非需要云服务认证）
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # 增加超时时间
+    outputs:
+      new_version: ${{ steps.update.outputs.new_version }}
+      should_update: ${{ steps.update.outputs.should_update }}
+    steps:
+      # ... [保持原有的检出仓库和预安装依赖步骤不变] ...
+
+      - name: 安装 JavaScript 混淆工具
+        run: npm install -g javascript-obfuscator  # 新增工具安装步骤
+
+      - name: 检查并更新 Worker
+        id: update
+        # ... [保持原有检查更新逻辑不变] ...
+
+      - name: 检查工作目录
+        run: |
+          if [ ! -d "worker-repo" ]; then
+            echo "错误：worker-repo 目录不存在"
+            exit 1
+          fi
+
+      - name: 混淆Worker代码（条件执行）
+        if: ${{ steps.update.outputs.should_update == 'true' || inputs.force_update == 'true' }}
+        run: |
+          set -euo pipefail
+          cd worker-repo
+          
+          # 日志函数定义（保持与检查步骤一致）
+          log() { 
+            local level=$1
+            shift
+            echo "[$(date +'%Y-%m-%d %H:%M:%S')] [$level] $@"
+          }
+          
+          # 创建临时工作目录
+          mkdir -p tmp
+          cp _worker.js tmp/
+          
+          # 执行增强混淆（替换为实际域名）
+          javascript-obfuscator tmp/_worker.js \
+            --output _worker.obfuscated.js \
+            --compact true \
+            --control-flow-flattening true \
+            --control-flow-flattening-threshold 0.75 \
+            --dead-code-injection true \
+            --string-array true \
+            --string-array-threshold 0.75 \
+            --numbers-to-expressions true \
+            --self-defending true \
+            --split-strings true \
+            --domain-lock "your-actual-domain.com"  # 替换为实际域名
+            --rotate-string-array true
+
+          # 替换原始文件并清理
+          mv _worker.obfuscated.js _worker.js
+          rm -rf tmp
+
+          # 安全权限设置
+          chmod 644 _worker.js
+
+          # 日志记录
+          log "INFO" "代码混淆完成，已增强安全防护"
+          log "DEBUG" "文件哈希校验: $(sha256sum _worker.js | cut -d' ' -f1)"
+
+          # 验证混淆结果（检查混淆器标识）
+          if ! grep -q "javascript-obfuscator" _worker.js; then  # 优化验证逻辑
+            log "ERROR" "混淆标识未找到，可能混淆失败"
+            exit 1
+          fi
+
+          # 提交准备
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add _worker.js
+
+      - name: 提交并推送更改
+        if: ${{ steps.update.outputs.should_update == 'true' || inputs.force_update == 'true' }}
+        run: |
+          git commit -m "chore: 混淆并更新 Worker 代码"
+          git push origin main
