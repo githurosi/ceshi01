@@ -1,0 +1,133 @@
+name: Auto Update Worker
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "0 1 * * *" # 每天凌晨1点运行
+  workflow_dispatch:
+    inputs:
+      force_update:
+        description: '是否强制更新（忽略版本检查）'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ env.TAG_NAME }}
+      changelog: ${{ env.CHANGELOG }}
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 设置环境
+        run: |
+          echo "REPO_URL=https://api.github.com/repos/bia-pain-bache/BPB-Worker-Panel/releases" >> $GITHUB_ENV
+          echo "TARGET_FILE=worker.zip" >> $GITHUB_ENV
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget unzip jq
+
+      - name: 检查并更新 Worker
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          
+          # 日志函数（带格式化）
+          log() {
+            local level=$1
+            shift
+            # 转义特殊字符
+            msg=$(echo "$@" | sed 's/"/\\"/g' | sed "s/'/\\'/g")
+            echo "[$(date +'%Y-%m-%d %H:%M:%S')] [$level] $msg"
+          }
+
+          log "INFO" "开始检查更新..."
+
+          # 获取本地版本
+          LOCAL_VERSION=$(cat version.txt 2>/dev/null || echo "")
+          log "DEBUG" "本地版本: ${LOCAL_VERSION:-无}"
+
+          # 获取最新 Release
+          log "INFO" "获取最新 Release 信息..."
+          RESPONSE=$(curl -s --retry 3 \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "$REPO_URL")
+          if [ $? -ne 0 ]; then
+            log "ERROR" "无法访问 GitHub API"
+            exit 1
+          fi
+
+          TAG_NAME=$(echo "$RESPONSE" | jq -r '.[0].tag_name')
+          DOWNLOAD_URL=$(echo "$RESPONSE" | jq -r '.[0].assets[] | select(.name == "'"$TARGET_FILE"'") | .browser_download_url')
+          CHANGELOG=$(echo "$RESPONSE" | jq -r '.[0].body' | sed 's/"/\\"/g' | sed "s/'/\\'/g")  # 转义特殊字符
+
+          if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" == "null" ]; then
+            log "ERROR" "未找到 $TARGET_FILE"
+            exit 1
+          fi
+          log "INFO" "最新版本: $TAG_NAME"
+
+          # 判断是否需要更新
+          FORCE_UPDATE=${{ inputs.force_update || 'false' }}
+          if [ "$LOCAL_VERSION" = "$TAG_NAME" ] && [ "$FORCE_UPDATE" != "true" ]; then
+            log "INFO" "已是最新版本，无需更新"
+            echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
+            echo "CHANGELOG=$CHANGELOG" >> $GITHUB_ENV
+            exit 0
+          fi
+
+          # 下载并更新
+          log "INFO" "下载 $TARGET_FILE..."
+          wget -q -O "$TARGET_FILE" "$DOWNLOAD_URL"
+          log "INFO" "解压 $TARGET_FILE..."
+          unzip -o "$TARGET_FILE"
+          rm "$TARGET_FILE"
+          
+          # 确保目标目录存在
+          mkdir -p disk
+          
+          # 查找并移动文件（根据实际项目结构调整）
+          MAIN_JS=$(find . -name "*.js" -type f | head -1)
+          if [ -z "$MAIN_JS" ]; then
+            log "ERROR" "未找到JS文件"
+            exit 1
+          fi
+          
+          mv "$MAIN_JS" disk/worker.js
+          echo "$TAG_NAME" > version.txt
+          echo "$CHANGELOG" > changelog.md  # 保存更新日志
+          log "INFO" "更新完成，新版本: $TAG_NAME"
+          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
+          echo "CHANGELOG=$CHANGELOG" >> $GITHUB_ENV
+
+      - name: 提交更改
+        if: success()
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: |
+            🔄 自动同步 Worker 版本: ${{ env.TAG_NAME }}
+            
+            更新内容:
+            ${{ env.CHANGELOG }}
+          commit_author: "github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
+          file_pattern: "version.txt changelog.md disk/worker.js"
+
+      - name: 创建版本标签
+        if: success()
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          
+          git tag -a "v${{ env.TAG_NAME }}" -m "发布版本 v${{ env.TAG_NAME }}"
+          git push origin "v${{ env.TAG_NAME }}"
