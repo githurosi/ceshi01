@@ -1,0 +1,82 @@
+name: Worker Code Processor
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+    inputs:
+      force_update:
+        description: '强制更新模式（跳过版本检查）'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 检出当前仓库
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: 下载最新 worker.zip
+        run: |
+          curl -LJO https://github.com/bia-pain-bache/BPB-Worker-Panel/archive/refs/heads/main.zip
+          unzip main.zip -d temp_repo
+          mv temp_repo/BPB-Worker-Panel-main/worker.js .
+          rm -rf main.zip temp_repo
+
+      - name: 安装混淆工具
+        run: npm install -g javascript-obfuscator
+
+      - name: 执行代码混淆
+        run: |
+          mkdir -p disk  # 创建目标目录
+          javascript-obfuscator worker.js \
+            --output disk/worker.obfuscated.js \
+            --compact true \
+            --control-flow-flattening true \
+            --control-flow-flattening-threshold 0.75 \
+            --dead-code-injection true \
+            --string-array true \
+            --string-array-threshold 0.75 \
+            --numbers-to-expressions true \
+            --self-defending true \
+            --split-strings true \
+            --domain-lock "${{ github.repository_owner }}.github.io" \
+            --rotate-string-array true
+
+          # 验证混淆结果
+          if ! grep -q "selfDefending" disk/worker.obfuscated.js; then
+            echo "错误：自保护代码未注入"
+            exit 1
+          fi
+
+          # 重命名混淆文件
+          mv disk/worker.obfuscated.js disk/worker.js
+
+      - name: 提交混淆结果
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          
+          # 仅当文件变更时提交
+          if git diff --quiet disk/worker.js; then
+            echo "无代码变更，跳过提交"
+            exit 0
+          fi
+
+          git add disk/worker.js
+          git commit -m "chore: 更新混淆后的 Worker 代码 [skip ci]"
+          git push origin main
