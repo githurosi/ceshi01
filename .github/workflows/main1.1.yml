@@ -30,20 +30,40 @@ jobs:
         with:
           ref: main
 
-      - name: 下载最新 worker.zip
+      - name: 下载最新 worker.zip（增强验证）
         run: |
-          curl -LJO https://github.com/bia-pain-bache/BPB-Worker-Panel/archive/refs/heads/main.zip
-          unzip main.zip -d temp_repo
+          # 下载时显示进度条
+          curl -LJO -# https://github.com/bia-pain-bache/BPB-Worker-Panel/archive/refs/heads/main.zip
+          
+          # 验证文件完整性
+          if [ ! -f "main.zip" ]; then
+            echo "错误：main.zip 下载失败"
+            exit 1
+          fi
+          
+          # 解压前创建目标目录
+          mkdir -p temp_repo
+          
+          # 解压并验证内容
+          unzip -o main.zip -d temp_repo
+          if [ ! -f "temp_repo/BPB-Worker-Panel-main/worker.js" ]; then
+            echo "错误：未找到 worker.js 文件"
+            exit 1
+          fi
+
+          # 移动目标文件
           mv temp_repo/BPB-Worker-Panel-main/worker.js .
           rm -rf main.zip temp_repo
 
       - name: 安装混淆工具
-        run: npm install -g javascript-obfuscator
+        run: npm install -g javascript-obfuscator@4.0.0  # 指定版本保证稳定性
 
-      - name: 执行代码混淆
+      - name: 执行代码混淆（增强安全）
         run: |
-          mkdir -p disk  # 创建目标目录
-          javascript-obfuscator worker.js \
+          mkdir -p disk  # 确保目标目录存在
+          
+          # 增强型混淆配置（带错误处理）
+          if ! javascript-obfuscator worker.js \
             --output disk/worker.obfuscated.js \
             --compact true \
             --control-flow-flattening true \
@@ -55,7 +75,11 @@ jobs:
             --self-defending true \
             --split-strings true \
             --domain-lock "${{ github.repository_owner }}.github.io" \
-            --rotate-string-array true
+            --rotate-string-array true; then
+            
+            echo "错误：代码混淆失败"
+            exit 1
+          fi
 
           # 验证混淆结果
           if ! grep -q "selfDefending" disk/worker.obfuscated.js; then
@@ -66,7 +90,7 @@ jobs:
           # 重命名混淆文件
           mv disk/worker.obfuscated.js disk/worker.js
 
-      - name: 提交混淆结果
+      - name: 提交混淆结果（智能提交）
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
