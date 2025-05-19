@@ -33,11 +33,11 @@ jobs:
       - name: 下载最新 worker.zip（增强验证）
         run: |
           # 下载时显示进度条
-          curl -LJO -# https://github.com/bia-pain-bache/BPB-Worker-Panel/archive/refs/heads/main.zip
+          curl -LJO -# https://github.com/bia-pain-bache/BPB-Worker-Panel/archive/refs/heads/worker.zip
           
           # 验证文件完整性
-          if [ ! -f "main.zip" ]; then
-            echo "错误：main.zip 下载失败"
+          if [ ! -f "worker.zip" ]; then
+            echo "错误：worker.zip 下载失败"
             exit 1
           fi
           
@@ -45,7 +45,7 @@ jobs:
           mkdir -p temp_repo
           
           # 解压并验证内容
-          unzip -o main.zip -d temp_repo
+          unzip -o worker.zip -d temp_repo
           if [ ! -f "temp_repo/BPB-Worker-Panel-main/worker.js" ]; then
             echo "错误：未找到 worker.js 文件"
             exit 1
