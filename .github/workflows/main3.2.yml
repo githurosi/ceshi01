@@ -91,6 +91,9 @@ jobs:
             exit 1
           fi
           
+          # 验证文件路径
+          log "DEBUG" "Found main JS file: $MAIN_JS"
+          
           # 移动文件到目标位置
           mv "$MAIN_JS" temp_extract/disk/worker.js
           
@@ -109,6 +112,12 @@ jobs:
           # 同步到目标目录
           mkdir -p disk
           cp -r temp_extract/disk/* disk/
+          
+          # 验证目标文件
+          if [ ! -f "disk/worker.js" ]; then
+            echo "Error: Target file not found: disk/worker.js"
+            exit 1
+          fi
           
           log "INFO" "Update completed, new version: $TAG_NAME"
           echo "new_version=$TAG_NAME" >> $GITHUB_OUTPUT
